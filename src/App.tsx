@@ -32,6 +32,7 @@ type Competitor = {
   id: string
   name: string
   group: string
+  obstacles?: string[]
   runStartedAt: number
   status: Status
   currentObstacle: number
@@ -44,6 +45,7 @@ type ArchivedSession = {
   startedAt: number
   endedAt: number
   obstacles: string[]
+  groupObstacles?: Record<string, string[]>
   groups: string[]
   competitors: Competitor[]
 }
@@ -51,6 +53,7 @@ type ArchivedSession = {
 type StoredData = {
   sessionStartedAt: number
   obstacles: string[]
+  groupObstacles?: Record<string, string[]>
   groups: string[]
   competitors: Competitor[]
   history: ArchivedSession[]
@@ -66,22 +69,53 @@ const loadData = (): StoredData => {
     const saved = localStorage.getItem(STORAGE_KEY)
     if (saved) {
       const data = JSON.parse(saved) as StoredData
+      const fallbackObstacles = data.obstacles ?? [...OBSTACLES]
+      const groupObstacles = data.groupObstacles ?? Object.fromEntries(
+        data.groups.map((group) => [group, [...fallbackObstacles]])
+      )
       return {
         ...data,
-        obstacles: data.obstacles ?? [...OBSTACLES],
-        history: data.history.map((session) => ({ ...session, obstacles: session.obstacles ?? [...OBSTACLES] })),
+        obstacles: fallbackObstacles,
+        groupObstacles,
+        competitors: data.competitors.map((competitor) => ({
+          ...competitor,
+          obstacles: competitor.obstacles ?? [...(groupObstacles[competitor.group] ?? fallbackObstacles)],
+        })),
+        history: data.history.map((session) => {
+          const sessionObstacles = session.obstacles ?? [...OBSTACLES]
+          const sessionGroupObstacles = session.groupObstacles ?? Object.fromEntries(
+            session.groups.map((group) => [group, [...sessionObstacles]])
+          )
+          return {
+            ...session,
+            obstacles: sessionObstacles,
+            groupObstacles: sessionGroupObstacles,
+            competitors: session.competitors.map((competitor) => ({
+              ...competitor,
+              obstacles: competitor.obstacles ?? [...(sessionGroupObstacles[competitor.group] ?? sessionObstacles)],
+            })),
+          }
+        }),
       }
     }
     const legacy: Competitor[] = JSON.parse(localStorage.getItem(LEGACY_STORAGE_KEY) ?? '[]')
     return {
       sessionStartedAt: Date.now(),
       obstacles: [...OBSTACLES],
+      groupObstacles: { General: [...OBSTACLES] },
       groups: ['General'],
       competitors: legacy.map((competitor) => ({ ...competitor, group: competitor.group ?? 'General' })),
       history: [],
     }
   } catch {
-    return { sessionStartedAt: Date.now(), obstacles: [...OBSTACLES], groups: ['General'], competitors: [], history: [] }
+    return {
+      sessionStartedAt: Date.now(),
+      obstacles: [...OBSTACLES],
+      groupObstacles: { General: [...OBSTACLES] },
+      groups: ['General'],
+      competitors: [],
+      history: [],
+    }
   }
 }
 
@@ -168,7 +202,10 @@ function App() {
   const [group, setGroup] = useState(initialData.groups[0] ?? 'General')
   const [newGroup, setNewGroup] = useState('')
   const [addingGroup, setAddingGroup] = useState(false)
-  const [obstacles, setObstacles] = useState<string[]>(initialData.obstacles)
+  const [groupObstacles, setGroupObstacles] = useState<Record<string, string[]>>(
+    initialData.groupObstacles ?? { General: [...initialData.obstacles] }
+  )
+  const [settingsGroup, setSettingsGroup] = useState(initialData.groups[0] ?? 'General')
   const [groups, setGroups] = useState(initialData.groups)
   const [sessionStartedAt, setSessionStartedAt] = useState(initialData.sessionStartedAt)
   const [history, setHistory] = useState<ArchivedSession[]>(initialData.history)
@@ -178,8 +215,15 @@ function App() {
   const [competitors, setCompetitors] = useState<Competitor[]>(initialData.competitors)
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ sessionStartedAt, obstacles, groups, competitors, history }))
-  }, [sessionStartedAt, obstacles, groups, competitors, history])
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      sessionStartedAt,
+      obstacles: groupObstacles.General ?? [...OBSTACLES],
+      groupObstacles,
+      groups,
+      competitors,
+      history,
+    }))
+  }, [sessionStartedAt, groupObstacles, groups, competitors, history])
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 50)
@@ -187,11 +231,21 @@ function App() {
   }, [])
 
   const active = competitors.find((competitor) => competitor.status === 'obstacle' || competitor.status === 'rest')
+  const activeObstacles = active?.obstacles ?? (active ? groupObstacles[active.group] : undefined) ?? [...OBSTACLES]
   const viewedSession = viewSessionId === 'current'
-    ? { id: 'current', startedAt: sessionStartedAt, obstacles, groups, competitors }
-    : history.find((session) => session.id === viewSessionId) ?? { id: 'current', startedAt: sessionStartedAt, obstacles, groups, competitors }
+    ? { id: 'current', startedAt: sessionStartedAt, obstacles: groupObstacles.General ?? [...OBSTACLES], groupObstacles, groups, competitors }
+    : history.find((session) => session.id === viewSessionId) ?? {
+        id: 'current',
+        startedAt: sessionStartedAt,
+        obstacles: groupObstacles.General ?? [...OBSTACLES],
+        groupObstacles,
+        groups,
+        competitors,
+      }
   const viewedCompetitors = viewedSession.competitors
-  const viewedObstacles = viewedSession.obstacles
+  const viewedGroupObstacles = viewedSession.groupObstacles ?? Object.fromEntries(
+    viewedSession.groups.map((group) => [group, [...viewedSession.obstacles]])
+  )
   const viewedGroups = viewedSession.groups.filter((item) => viewedCompetitors.some((competitor) => competitor.group === item))
   const statsCompetitors = statsGroup === 'all'
     ? viewedCompetitors
@@ -203,6 +257,10 @@ function App() {
     const existingGroup = groups.find((item) => item.toLowerCase() === cleanGroup.toLowerCase())
     if (!existingGroup) {
       setGroups((current) => [...current, cleanGroup])
+      setGroupObstacles((current) => ({
+        ...current,
+        [cleanGroup]: [...(current.General ?? OBSTACLES)],
+      }))
     }
     setGroup(existingGroup ?? cleanGroup)
     setNewGroup('')
@@ -219,6 +277,7 @@ function App() {
         id: crypto.randomUUID(),
         name: cleanName,
         group,
+        obstacles: [...(groupObstacles[group] ?? groupObstacles.General ?? OBSTACLES)],
         runStartedAt: startedAt,
         status: 'obstacle',
         currentObstacle: 0,
@@ -237,7 +296,7 @@ function App() {
       const attempts = competitor.attempts.map((attempt, index) =>
         index === competitor.attempts.length - 1 ? { ...attempt, endedAt, outcome: 'done' as const } : attempt
       )
-      if (competitor.currentObstacle === obstacles.length - 1) {
+      if (competitor.currentObstacle === activeObstacles.length - 1) {
         return { ...competitor, attempts, status: 'finished' }
       }
       return {
@@ -310,17 +369,32 @@ function App() {
       id: crypto.randomUUID(),
       startedAt: sessionStartedAt,
       endedAt,
-      obstacles: [...obstacles],
+      obstacles: [...(groupObstacles.General ?? OBSTACLES)],
+      groupObstacles: Object.fromEntries(
+        Object.entries(groupObstacles).map(([groupName, names]) => [groupName, [...names]])
+      ),
       groups,
       competitors,
     }, ...current])
     setCompetitors([])
     setGroups(['General'])
+    setGroupObstacles({ General: [...(groupObstacles.General ?? OBSTACLES)] })
     setGroup('General')
+    setSettingsGroup('General')
     setSessionStartedAt(endedAt)
     setViewSessionId('current')
     setStatsGroup('all')
     setTab('track')
+  }
+
+  const deleteHistorySession = (id: string) => {
+    if (!window.confirm('Permanently delete this recorded session?')) return
+    setHistory((current) => current.filter((session) => session.id !== id))
+    if (viewSessionId === id) {
+      setViewSessionId('current')
+      setStatsGroup('all')
+      setTab('track')
+    }
   }
 
   const deleteCompetitor = (id: string) => {
@@ -329,20 +403,65 @@ function App() {
     }
   }
 
-  const obstacleSamples = (obstacle: number): Sample[] => statsCompetitors.flatMap((competitor) => {
-    const attempt = competitor.attempts.find((item) => item.obstacle === obstacle)
-    return attempt?.endedAt ? [{ name: competitor.name, value: attempt.endedAt - attempt.startedAt }] : []
-  })
+  const normalizeObstacle = (name: string) => name.trim().toLocaleLowerCase()
+  const courseForCompetitor = (competitor: Competitor) =>
+    competitor.obstacles ?? viewedGroupObstacles[competitor.group] ?? viewedSession.obstacles
+  const statsObstacleNames = (() => {
+    const source = statsCompetitors.length
+      ? statsCompetitors.flatMap(courseForCompetitor)
+      : statsGroup === 'all'
+        ? viewedGroups.flatMap((groupName) => viewedGroupObstacles[groupName] ?? [])
+        : viewedGroupObstacles[statsGroup] ?? []
+    const unique = new Map<string, string>()
+    source.forEach((name) => {
+      const normalized = normalizeObstacle(name)
+      if (normalized && !unique.has(normalized)) unique.set(normalized, name.trim())
+    })
+    return [...unique.values()]
+  })()
+  const statsRestNames = (() => {
+    const courses = statsCompetitors.length
+      ? statsCompetitors.map(courseForCompetitor)
+      : statsGroup === 'all'
+        ? viewedGroups.map((groupName) => viewedGroupObstacles[groupName] ?? [])
+        : [viewedGroupObstacles[statsGroup] ?? []]
+    const unique = new Map<string, string>()
+    courses.flatMap((course) => course.slice(0, -1)).forEach((name) => {
+      const normalized = normalizeObstacle(name)
+      if (normalized && !unique.has(normalized)) unique.set(normalized, name.trim())
+    })
+    return [...unique.values()]
+  })()
+  const sampleName = (competitor: Competitor) =>
+    statsGroup === 'all' ? `${competitor.name} · ${competitor.group}` : competitor.name
 
-  const arrivalSamples = (obstacle: number): Sample[] => statsCompetitors.flatMap((competitor) => {
-    const attempt = competitor.attempts.find((item) => item.obstacle === obstacle)
-    return attempt ? [{ name: competitor.name, value: attempt.startedAt - competitor.runStartedAt }] : []
-  })
+  const obstacleSamples = (obstacleName: string): Sample[] => statsCompetitors.flatMap((competitor) =>
+    competitor.attempts.flatMap((attempt) => {
+      const courseName = courseForCompetitor(competitor)[attempt.obstacle]
+      return attempt.endedAt && normalizeObstacle(courseName ?? '') === normalizeObstacle(obstacleName)
+        ? [{ name: sampleName(competitor), value: attempt.endedAt - attempt.startedAt }]
+        : []
+    })
+  )
 
-  const restSamples = (restIndex: number): Sample[] => statsCompetitors.flatMap((competitor) => {
-    const rest = competitor.rests.find((item) => item.afterObstacle === restIndex)
-    return rest?.endedAt ? [{ name: competitor.name, value: rest.endedAt - rest.startedAt }] : []
-  })
+  const arrivalSamples = (obstacleName: string): Sample[] => statsCompetitors.flatMap((competitor) =>
+    competitor.attempts.flatMap((attempt) => {
+      const courseName = courseForCompetitor(competitor)[attempt.obstacle]
+      return normalizeObstacle(courseName ?? '') === normalizeObstacle(obstacleName)
+        ? [{ name: sampleName(competitor), value: attempt.startedAt - competitor.runStartedAt }]
+        : []
+    })
+  )
+
+  const restSamples = (obstacleName: string): Sample[] => statsCompetitors.flatMap((competitor) =>
+    competitor.rests.flatMap((rest) => {
+      const courseName = courseForCompetitor(competitor)[rest.afterObstacle]
+      return rest.endedAt && normalizeObstacle(courseName ?? '') === normalizeObstacle(obstacleName)
+        ? [{ name: sampleName(competitor), value: rest.endedAt - rest.startedAt }]
+        : []
+    })
+  )
+  const settingsObstacles = groupObstacles[settingsGroup] ?? groupObstacles.General ?? [...OBSTACLES]
 
   return (
     <div className="app-shell">
@@ -367,13 +486,18 @@ function App() {
             <i /> Current · {formatSessionDate(sessionStartedAt)}
           </button>
           {history.map((session) => (
-            <button
-              key={session.id}
-              className={viewSessionId === session.id ? 'active' : ''}
-              onClick={() => { setViewSessionId(session.id); setStatsGroup('all'); setTab('results') }}
-            >
-              {formatSessionDate(session.startedAt)}
-            </button>
+            <div className={`history-item ${viewSessionId === session.id ? 'active' : ''}`} key={session.id}>
+              <button onClick={() => { setViewSessionId(session.id); setStatsGroup('all'); setTab('results') }}>
+                {formatSessionDate(session.startedAt)}
+              </button>
+              <button
+                className="history-delete"
+                onClick={() => deleteHistorySession(session.id)}
+                aria-label={`Delete session from ${formatSessionDate(session.startedAt)}`}
+              >
+                ×
+              </button>
+            </div>
           ))}
         </div>
       </div>
@@ -441,7 +565,7 @@ function App() {
                 </div>
 
                 <div className="course-rail" aria-label={`Obstacle ${active.currentObstacle + 1} of 8`}>
-                  {obstacles.map((obstacle, index) => {
+                  {activeObstacles.map((obstacle, index) => {
                     const complete = index < active.currentObstacle || active.status === 'finished'
                     const current = index === active.currentObstacle
                     return (
@@ -456,7 +580,7 @@ function App() {
                 <div className={`action-panel ${active.status}`}>
                   <div>
                     <span className="phase-label">{active.status === 'rest' ? `Rest ${active.currentObstacle + 1}` : `Obstacle ${active.currentObstacle + 1} of 8`}</span>
-                    <h3>{active.status === 'rest' ? 'Recovery time' : obstacles[active.currentObstacle]}</h3>
+                    <h3>{active.status === 'rest' ? 'Recovery time' : activeObstacles[active.currentObstacle]}</h3>
                   </div>
                   <div className="phase-clock">
                     {formatTime(now - (
@@ -515,7 +639,7 @@ function App() {
                           <span>
                             {competitor.status === 'finished'
                               ? 'Course complete'
-                              : `${viewedObstacles[competitor.currentObstacle]} · ${competitor.status === 'fallen' ? 'Fell' : 'In progress'}`}
+                              : `${courseForCompetitor(competitor)[competitor.currentObstacle]} · ${competitor.status === 'fallen' ? 'Fell' : 'In progress'}`}
                           </span>
                         </div>
                         <div className="result-progress">
@@ -557,8 +681,13 @@ function App() {
             <div className="stats-section">
               <div className="section-title"><span>01</span><div><h2>Obstacle time</h2><p>Time spent on each obstacle, including falls</p></div></div>
               <div className="stats-grid">
-                {viewedObstacles.map((obstacle, index) => (
-                  <StatCard key={index} title={obstacle} label={`Obstacle ${index + 1}`} samples={obstacleSamples(index)} />
+                {statsObstacleNames.map((obstacle, index) => (
+                  <StatCard
+                    key={normalizeObstacle(obstacle)}
+                    title={obstacle}
+                    label={statsGroup === 'all' ? 'All groups' : `Obstacle ${index + 1}`}
+                    samples={obstacleSamples(obstacle)}
+                  />
                 ))}
               </div>
             </div>
@@ -566,8 +695,13 @@ function App() {
             <div className="stats-section">
               <div className="section-title"><span>02</span><div><h2>Rest time</h2><p>Recovery time between obstacles</p></div></div>
               <div className="stats-grid">
-                {viewedObstacles.slice(0, -1).map((_, index) => (
-                  <StatCard key={index} title={`After ${viewedObstacles[index]}`} label={`Rest ${index + 1}`} samples={restSamples(index)} />
+                {statsRestNames.map((obstacle, index) => (
+                  <StatCard
+                    key={normalizeObstacle(obstacle)}
+                    title={`After ${obstacle}`}
+                    label={statsGroup === 'all' ? 'All groups' : `Rest ${index + 1}`}
+                    samples={restSamples(obstacle)}
+                  />
                 ))}
               </div>
             </div>
@@ -575,8 +709,8 @@ function App() {
             <div className="stats-section">
               <div className="section-title"><span>03</span><div><h2>Arrival time</h2><p>Elapsed time from the start to each obstacle</p></div></div>
               <div className="stats-grid">
-                {viewedObstacles.map((obstacle, index) => (
-                  <StatCard key={index} title={obstacle} label={`Start obstacle ${index + 1}`} samples={arrivalSamples(index)} />
+                {statsObstacleNames.map((obstacle) => (
+                  <StatCard key={normalizeObstacle(obstacle)} title={obstacle} label={`Start ${obstacle}`} samples={arrivalSamples(obstacle)} />
                 ))}
               </div>
             </div>
@@ -588,24 +722,42 @@ function App() {
             <div className="page-heading compact">
               <span className="eyebrow">Course setup</span>
               <h1>Name the obstacles.</h1>
-              <p>Changes apply to the current session. Archived sessions keep their original course names.</p>
+              <p>Each group can have its own course. Matching obstacle names are combined in global statistics.</p>
+            </div>
+            <div className="settings-groups">
+              <span>Edit course for</span>
+              {groups.map((groupName) => (
+                <button
+                  key={groupName}
+                  className={settingsGroup === groupName ? 'active' : ''}
+                  onClick={() => setSettingsGroup(groupName)}
+                >
+                  {groupName}
+                </button>
+              ))}
             </div>
             <div className="obstacle-settings">
-              {obstacles.map((obstacle, index) => (
+              {settingsObstacles.map((obstacle, index) => (
                 <label key={index}>
                   <span>{String(index + 1).padStart(2, '0')}</span>
                   <div>
                     <small>Obstacle {index + 1}</small>
                     <input
                       value={obstacle}
-                      onChange={(event) => setObstacles((current) =>
-                        current.map((item, itemIndex) => itemIndex === index ? event.target.value : item)
-                      )}
+                      onChange={(event) => setGroupObstacles((current) => ({
+                        ...current,
+                        [settingsGroup]: settingsObstacles.map((item, itemIndex) =>
+                          itemIndex === index ? event.target.value : item
+                        ),
+                      }))}
                       onBlur={() => {
                         if (!obstacle.trim()) {
-                          setObstacles((current) => current.map((item, itemIndex) =>
-                            itemIndex === index ? OBSTACLES[index] : item
-                          ))
+                          setGroupObstacles((current) => ({
+                            ...current,
+                            [settingsGroup]: settingsObstacles.map((item, itemIndex) =>
+                              itemIndex === index ? OBSTACLES[index] : item
+                            ),
+                          }))
                         }
                       }}
                     />
@@ -613,7 +765,12 @@ function App() {
                 </label>
               ))}
             </div>
-            <button className="restore-button" onClick={() => setObstacles([...OBSTACLES])}>Restore default names</button>
+            <button
+              className="restore-button"
+              onClick={() => setGroupObstacles((current) => ({ ...current, [settingsGroup]: [...OBSTACLES] }))}
+            >
+              Restore default names for {settingsGroup}
+            </button>
           </section>
         )}
       </main>
