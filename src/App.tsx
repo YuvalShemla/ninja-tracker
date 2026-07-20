@@ -31,6 +31,7 @@ type Rest = {
 type Competitor = {
   id: string
   name: string
+  group: string
   runStartedAt: number
   status: Status
   currentObstacle: number
@@ -38,9 +39,41 @@ type Competitor = {
   rests: Rest[]
 }
 
+type ArchivedSession = {
+  id: string
+  startedAt: number
+  endedAt: number
+  groups: string[]
+  competitors: Competitor[]
+}
+
+type StoredData = {
+  sessionStartedAt: number
+  groups: string[]
+  competitors: Competitor[]
+  history: ArchivedSession[]
+}
+
 type Sample = { name: string; value: number }
 
-const STORAGE_KEY = 'ninja-tracker-competition-v1'
+const STORAGE_KEY = 'ninja-tracker-competition-v2'
+const LEGACY_STORAGE_KEY = 'ninja-tracker-competition-v1'
+
+const loadData = (): StoredData => {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY)
+    if (saved) return JSON.parse(saved)
+    const legacy: Competitor[] = JSON.parse(localStorage.getItem(LEGACY_STORAGE_KEY) ?? '[]')
+    return {
+      sessionStartedAt: Date.now(),
+      groups: ['General'],
+      competitors: legacy.map((competitor) => ({ ...competitor, group: competitor.group ?? 'General' })),
+      history: [],
+    }
+  } catch {
+    return { sessionStartedAt: Date.now(), groups: ['General'], competitors: [], history: [] }
+  }
+}
 
 const Icon = ({ name }: { name: 'timer' | 'podium' | 'chart' | 'plus' | 'trash' | 'chevron' }) => {
   const paths = {
@@ -61,6 +94,13 @@ const formatTime = (milliseconds: number) => {
   const hundredths = totalHundredths % 100
   return `${minutes}:${seconds.toString().padStart(2, '0')}.${hundredths.toString().padStart(2, '0')}`
 }
+
+const formatSessionDate = (timestamp: number) => new Intl.DateTimeFormat(undefined, {
+  month: 'short',
+  day: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+}).format(timestamp)
 
 const summarize = (samples: Sample[]) => {
   if (!samples.length) return null
@@ -111,20 +151,23 @@ const StatCard = ({ title, label, samples }: { title: string; label: string; sam
 }
 
 function App() {
+  const initialData = useMemo(loadData, [])
   const [tab, setTab] = useState<Tab>('track')
   const [name, setName] = useState('')
+  const [group, setGroup] = useState(initialData.groups[0] ?? 'General')
+  const [newGroup, setNewGroup] = useState('')
+  const [addingGroup, setAddingGroup] = useState(false)
+  const [groups, setGroups] = useState(initialData.groups)
+  const [sessionStartedAt, setSessionStartedAt] = useState(initialData.sessionStartedAt)
+  const [history, setHistory] = useState<ArchivedSession[]>(initialData.history)
+  const [viewSessionId, setViewSessionId] = useState('current')
+  const [statsGroup, setStatsGroup] = useState('all')
   const [now, setNow] = useState(Date.now())
-  const [competitors, setCompetitors] = useState<Competitor[]>(() => {
-    try {
-      return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '[]')
-    } catch {
-      return []
-    }
-  })
+  const [competitors, setCompetitors] = useState<Competitor[]>(initialData.competitors)
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(competitors))
-  }, [competitors])
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ sessionStartedAt, groups, competitors, history }))
+  }, [sessionStartedAt, groups, competitors, history])
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 50)
@@ -132,16 +175,37 @@ function App() {
   }, [])
 
   const active = competitors.find((competitor) => competitor.status === 'obstacle' || competitor.status === 'rest')
+  const viewedSession = viewSessionId === 'current'
+    ? { id: 'current', startedAt: sessionStartedAt, groups, competitors }
+    : history.find((session) => session.id === viewSessionId) ?? { id: 'current', startedAt: sessionStartedAt, groups, competitors }
+  const viewedCompetitors = viewedSession.competitors
+  const viewedGroups = viewedSession.groups.filter((item) => viewedCompetitors.some((competitor) => competitor.group === item))
+  const statsCompetitors = statsGroup === 'all'
+    ? viewedCompetitors
+    : viewedCompetitors.filter((competitor) => competitor.group === statsGroup)
+
+  const addGroup = () => {
+    const cleanGroup = newGroup.trim()
+    if (!cleanGroup) return
+    const existingGroup = groups.find((item) => item.toLowerCase() === cleanGroup.toLowerCase())
+    if (!existingGroup) {
+      setGroups((current) => [...current, cleanGroup])
+    }
+    setGroup(existingGroup ?? cleanGroup)
+    setNewGroup('')
+    setAddingGroup(false)
+  }
 
   const startCompetitor = () => {
     const cleanName = name.trim()
-    if (!cleanName || active) return
+    if (!cleanName || !group || active) return
     const startedAt = Date.now()
     setCompetitors((current) => [
       ...current,
       {
         id: crypto.randomUUID(),
         name: cleanName,
+        group,
         runStartedAt: startedAt,
         status: 'obstacle',
         currentObstacle: 0,
@@ -208,7 +272,7 @@ function App() {
     ))
   }
 
-  const ranked = useMemo(() => {
+  const rankCompetitors = (list: Competitor[]) => {
     const resultTime = (competitor: Competitor) => {
       const lastAttempt = competitor.attempts[competitor.attempts.length - 1]
       if (competitor.status === 'finished' && lastAttempt?.endedAt) {
@@ -216,12 +280,34 @@ function App() {
       }
       return lastAttempt.startedAt - competitor.runStartedAt
     }
-    return [...competitors].sort((a, b) => {
+    return [...list].sort((a, b) => {
       const aFinished = a.status === 'finished' ? 1 : 0
       const bFinished = b.status === 'finished' ? 1 : 0
       return bFinished - aFinished || b.currentObstacle - a.currentObstacle || resultTime(a) - resultTime(b)
     }).map((competitor) => ({ ...competitor, resultTime: resultTime(competitor) }))
-  }, [competitors])
+  }
+
+  const resetSession = () => {
+    const message = active
+      ? 'A competitor is still on course. Archive this session and start a new one?'
+      : 'Archive this session and start a new recording session?'
+    if (!window.confirm(message)) return
+    const endedAt = Date.now()
+    setHistory((current) => [{
+      id: crypto.randomUUID(),
+      startedAt: sessionStartedAt,
+      endedAt,
+      groups,
+      competitors,
+    }, ...current])
+    setCompetitors([])
+    setGroups(['General'])
+    setGroup('General')
+    setSessionStartedAt(endedAt)
+    setViewSessionId('current')
+    setStatsGroup('all')
+    setTab('track')
+  }
 
   const deleteCompetitor = (id: string) => {
     if (window.confirm('Delete this competitor and all recorded times?')) {
@@ -229,17 +315,17 @@ function App() {
     }
   }
 
-  const obstacleSamples = (obstacle: number): Sample[] => competitors.flatMap((competitor) => {
+  const obstacleSamples = (obstacle: number): Sample[] => statsCompetitors.flatMap((competitor) => {
     const attempt = competitor.attempts.find((item) => item.obstacle === obstacle)
     return attempt?.endedAt ? [{ name: competitor.name, value: attempt.endedAt - attempt.startedAt }] : []
   })
 
-  const arrivalSamples = (obstacle: number): Sample[] => competitors.flatMap((competitor) => {
+  const arrivalSamples = (obstacle: number): Sample[] => statsCompetitors.flatMap((competitor) => {
     const attempt = competitor.attempts.find((item) => item.obstacle === obstacle)
     return attempt ? [{ name: competitor.name, value: attempt.startedAt - competitor.runStartedAt }] : []
   })
 
-  const restSamples = (restIndex: number): Sample[] => competitors.flatMap((competitor) => {
+  const restSamples = (restIndex: number): Sample[] => statsCompetitors.flatMap((competitor) => {
     const rest = competitor.rests.find((item) => item.afterObstacle === restIndex)
     return rest?.endedAt ? [{ name: competitor.name, value: rest.endedAt - rest.startedAt }] : []
   })
@@ -251,12 +337,36 @@ function App() {
           <span className="brand-mark">N</span>
           <span>Ninja <b>Tracker</b></span>
         </button>
-        <span className={`status-pill ${active ? 'live' : ''}`}><i />{active ? 'Course live' : 'Ready'}</span>
+        <div className="topbar-actions">
+          <span className={`status-pill ${active ? 'live' : ''}`}><i />{active ? 'Course live' : 'Ready'}</span>
+          <button className="reset-button" onClick={resetSession}>New session</button>
+        </div>
       </header>
+
+      <div className="session-bar">
+        <span>History</span>
+        <div className="session-scroll">
+          <button
+            className={viewSessionId === 'current' ? 'active' : ''}
+            onClick={() => { setViewSessionId('current'); setStatsGroup('all') }}
+          >
+            <i /> Current · {formatSessionDate(sessionStartedAt)}
+          </button>
+          {history.map((session) => (
+            <button
+              key={session.id}
+              className={viewSessionId === session.id ? 'active' : ''}
+              onClick={() => { setViewSessionId(session.id); setStatsGroup('all'); setTab('results') }}
+            >
+              {formatSessionDate(session.startedAt)}
+            </button>
+          ))}
+        </div>
+      </div>
 
       <main>
         {tab === 'track' && (
-          <section className="page track-page">
+          <section className={`page track-page ${active ? 'run-active' : ''}`}>
             <div className="page-heading">
               <span className="eyebrow">Competition control</span>
               <h1>Track the run.<br /><em>Beat the clock.</em></h1>
@@ -271,6 +381,29 @@ function App() {
                   <h2>Who’s on the start line?</h2>
                 </div>
                 <div className="start-form">
+                  <div className="group-picker">
+                    <label>
+                      <span className="sr-only">Competitor group</span>
+                      <select value={group} onChange={(event) => setGroup(event.target.value)}>
+                        {groups.map((item) => <option key={item}>{item}</option>)}
+                      </select>
+                    </label>
+                    <button className="add-group-button" onClick={() => setAddingGroup(!addingGroup)} aria-expanded={addingGroup}>
+                      + Group
+                    </button>
+                  </div>
+                  {addingGroup && (
+                    <div className="new-group-row">
+                      <input
+                        value={newGroup}
+                        onChange={(event) => setNewGroup(event.target.value)}
+                        onKeyDown={(event) => event.key === 'Enter' && addGroup()}
+                        placeholder="Group name"
+                        autoFocus
+                      />
+                      <button className="button primary" onClick={addGroup} disabled={!newGroup.trim()}>Add</button>
+                    </div>
+                  )}
                   <label>
                     <span className="sr-only">Competitor name</span>
                     <input
@@ -290,7 +423,7 @@ function App() {
               <div className="live-card">
                 <div className="live-meta">
                   <div>
-                    <span className="field-label">On course</span>
+                    <span className="field-label">On course · {active.group}</span>
                     <h2>{active.name}</h2>
                   </div>
                   <div className="master-clock">
@@ -358,26 +491,39 @@ function App() {
               <p>Farthest obstacle first. Ties are decided by the fastest arrival time.</p>
             </div>
             <div className="leaderboard">
-              {ranked.length ? ranked.map((competitor, index) => (
-                <article className={`result-row rank-${index + 1}`} key={competitor.id}>
-                  <div className="rank">{String(index + 1).padStart(2, '0')}</div>
-                  <div className="result-name">
-                    <strong>{competitor.name}</strong>
-                    <span>
-                      {competitor.status === 'finished'
-                        ? 'Course complete'
-                        : `${OBSTACLES[competitor.currentObstacle]} · ${competitor.status === 'fallen' ? 'Fell' : 'In progress'}`}
-                    </span>
-                  </div>
-                  <div className="result-progress">
-                    <span>{competitor.status === 'finished' ? 'Buzzer' : `Obstacle ${competitor.currentObstacle + 1}`}</span>
-                    <strong>{formatTime(competitor.resultTime)}</strong>
-                  </div>
-                  <button className="icon-button" onClick={() => deleteCompetitor(competitor.id)} aria-label={`Delete ${competitor.name}`}>
-                    <Icon name="trash" />
-                  </button>
-                </article>
-              )) : (
+              {viewedCompetitors.length ? viewedGroups.map((groupName) => {
+                const groupRanked = rankCompetitors(viewedCompetitors.filter((competitor) => competitor.group === groupName))
+                return (
+                  <section className="group-results" key={groupName}>
+                    <div className="group-heading">
+                      <span>{groupName}</span>
+                      <small>{groupRanked.length} competitor{groupRanked.length === 1 ? '' : 's'}</small>
+                    </div>
+                    {groupRanked.map((competitor, index) => (
+                      <article className={`result-row rank-${index + 1}`} key={competitor.id}>
+                        <div className="rank">{String(index + 1).padStart(2, '0')}</div>
+                        <div className="result-name">
+                          <strong>{competitor.name}</strong>
+                          <span>
+                            {competitor.status === 'finished'
+                              ? 'Course complete'
+                              : `${OBSTACLES[competitor.currentObstacle]} · ${competitor.status === 'fallen' ? 'Fell' : 'In progress'}`}
+                          </span>
+                        </div>
+                        <div className="result-progress">
+                          <span>{competitor.status === 'finished' ? 'Buzzer' : `Obstacle ${competitor.currentObstacle + 1}`}</span>
+                          <strong>{formatTime(competitor.resultTime)}</strong>
+                        </div>
+                        {viewSessionId === 'current' && (
+                          <button className="icon-button" onClick={() => deleteCompetitor(competitor.id)} aria-label={`Delete ${competitor.name}`}>
+                            <Icon name="trash" />
+                          </button>
+                        )}
+                      </article>
+                    ))}
+                  </section>
+                )
+              }) : (
                 <div className="empty-state"><span>8</span><h2>The course is waiting</h2><p>Start the first competitor to build the leaderboard.</p></div>
               )}
             </div>
@@ -390,6 +536,14 @@ function App() {
               <span className="eyebrow">Course intelligence</span>
               <h1>Every split, <em>exposed.</em></h1>
               <p>Tap any card to see the individual times behind the numbers.</p>
+            </div>
+
+            <div className="stats-filter" aria-label="Statistics scope">
+              <span>Showing</span>
+              <button className={statsGroup === 'all' ? 'active' : ''} onClick={() => setStatsGroup('all')}>All groups</button>
+              {viewedGroups.map((item) => (
+                <button key={item} className={statsGroup === item ? 'active' : ''} onClick={() => setStatsGroup(item)}>{item}</button>
+              ))}
             </div>
 
             <div className="stats-section">
@@ -423,7 +577,7 @@ function App() {
       </main>
 
       <nav className="bottom-nav" aria-label="Main navigation">
-        <button className={tab === 'track' ? 'active' : ''} onClick={() => setTab('track')}>
+        <button className={tab === 'track' ? 'active' : ''} onClick={() => { setViewSessionId('current'); setTab('track') }}>
           <Icon name={active ? 'timer' : 'plus'} /><span>Track</span>
         </button>
         <button className={tab === 'results' ? 'active' : ''} onClick={() => setTab('results')}>
