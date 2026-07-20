@@ -2,6 +2,16 @@ import { useEffect, useMemo, useState } from 'react'
 import './App.css'
 
 const OBSTACLES = [
+  'Balance',
+  'Mix Grip <-> Disk',
+  'Floating Doors',
+  'Bar to Bar',
+  'Salmon + Dragon',
+  'Crimp Class',
+  'Lighting Bolts',
+  'Warped Wall',
+] as const
+const OLD_DEFAULT_OBSTACLES = [
   'Steps',
   'Log Grip',
   'Ring Toss',
@@ -12,7 +22,13 @@ const OBSTACLES = [
   'Warped Wall',
 ] as const
 
-type Status = 'obstacle' | 'rest' | 'fallen' | 'finished'
+const migrateDefaultCourse = (course: string[]) =>
+  course.length === OLD_DEFAULT_OBSTACLES.length
+  && course.every((name, index) => name === OLD_DEFAULT_OBSTACLES[index])
+    ? [...OBSTACLES]
+    : course
+
+type Status = 'ready' | 'obstacle' | 'rest' | 'fallen' | 'finished'
 type Tab = 'track' | 'results' | 'stats' | 'settings'
 
 type Attempt = {
@@ -69,9 +85,12 @@ const loadData = (): StoredData => {
     const saved = localStorage.getItem(STORAGE_KEY)
     if (saved) {
       const data = JSON.parse(saved) as StoredData
-      const fallbackObstacles = data.obstacles ?? [...OBSTACLES]
-      const groupObstacles = data.groupObstacles ?? Object.fromEntries(
+      const fallbackObstacles = migrateDefaultCourse(data.obstacles ?? [...OBSTACLES])
+      const savedGroupObstacles = data.groupObstacles ?? Object.fromEntries(
         data.groups.map((group) => [group, [...fallbackObstacles]])
+      )
+      const groupObstacles = Object.fromEntries(
+        Object.entries(savedGroupObstacles).map(([group, course]) => [group, migrateDefaultCourse(course)])
       )
       return {
         ...data,
@@ -230,7 +249,9 @@ function App() {
     return () => window.clearInterval(timer)
   }, [])
 
+  const pending = competitors.find((competitor) => competitor.status === 'ready')
   const active = competitors.find((competitor) => competitor.status === 'obstacle' || competitor.status === 'rest')
+  const courseCompetitor = active ?? pending
   const activeObstacles = active?.obstacles ?? (active ? groupObstacles[active.group] : undefined) ?? [...OBSTACLES]
   const viewedSession = viewSessionId === 'current'
     ? { id: 'current', startedAt: sessionStartedAt, obstacles: groupObstacles.General ?? [...OBSTACLES], groupObstacles, groups, competitors }
@@ -267,10 +288,9 @@ function App() {
     setAddingGroup(false)
   }
 
-  const startCompetitor = () => {
+  const addCompetitor = () => {
     const cleanName = name.trim()
-    if (!cleanName || !group || active) return
-    const startedAt = Date.now()
+    if (!cleanName || !group || courseCompetitor) return
     setCompetitors((current) => [
       ...current,
       {
@@ -278,14 +298,34 @@ function App() {
         name: cleanName,
         group,
         obstacles: [...(groupObstacles[group] ?? groupObstacles.General ?? OBSTACLES)],
-        runStartedAt: startedAt,
-        status: 'obstacle',
+        runStartedAt: 0,
+        status: 'ready',
         currentObstacle: 0,
-        attempts: [{ obstacle: 0, startedAt }],
+        attempts: [],
         rests: [],
       },
     ])
     setName('')
+  }
+
+  const startPendingCompetitor = () => {
+    if (!pending) return
+    const startedAt = Date.now()
+    setCompetitors((current) => current.map((competitor) =>
+      competitor.id === pending.id
+        ? {
+            ...competitor,
+            runStartedAt: startedAt,
+            status: 'obstacle',
+            attempts: [{ obstacle: 0, startedAt }],
+          }
+        : competitor
+    ))
+  }
+
+  const removePendingCompetitor = () => {
+    if (!pending) return
+    setCompetitors((current) => current.filter((competitor) => competitor.id !== pending.id))
   }
 
   const finishObstacle = () => {
@@ -347,20 +387,23 @@ function App() {
   const rankCompetitors = (list: Competitor[]) => {
     const resultTime = (competitor: Competitor) => {
       const lastAttempt = competitor.attempts[competitor.attempts.length - 1]
+      if (!lastAttempt) return Number.POSITIVE_INFINITY
       if (competitor.status === 'finished' && lastAttempt?.endedAt) {
         return lastAttempt.endedAt - competitor.runStartedAt
       }
       return lastAttempt.startedAt - competitor.runStartedAt
     }
     return [...list].sort((a, b) => {
+      const aReady = a.status === 'ready' ? 1 : 0
+      const bReady = b.status === 'ready' ? 1 : 0
       const aFinished = a.status === 'finished' ? 1 : 0
       const bFinished = b.status === 'finished' ? 1 : 0
-      return bFinished - aFinished || b.currentObstacle - a.currentObstacle || resultTime(a) - resultTime(b)
+      return aReady - bReady || bFinished - aFinished || b.currentObstacle - a.currentObstacle || resultTime(a) - resultTime(b)
     }).map((competitor) => ({ ...competitor, resultTime: resultTime(competitor) }))
   }
 
   const resetSession = () => {
-    const message = active
+    const message = courseCompetitor
       ? 'A competitor is still on course. Archive this session and start a new one?'
       : 'Archive this session and start a new recording session?'
     if (!window.confirm(message)) return
@@ -471,7 +514,7 @@ function App() {
           <span>Ninja <b>Tracker</b></span>
         </button>
         <div className="topbar-actions">
-          <span className={`status-pill ${active ? 'live' : ''}`}><i />{active ? 'Course live' : 'Ready'}</span>
+          <span className={`status-pill ${active ? 'live' : ''}`}><i />{active ? 'Course live' : pending ? 'At start' : 'Ready'}</span>
           <button className="reset-button" onClick={resetSession}>New session</button>
         </div>
       </header>
@@ -505,7 +548,7 @@ function App() {
       <main>
         {tab === 'track' && (
           <section className={`page track-page ${active ? 'run-active' : ''}`}>
-            {!active ? (
+            {!courseCompetitor ? (
               <div className="new-run-card">
                 <div className="number-stamp">01</div>
                 <div className="new-run-copy">
@@ -541,17 +584,33 @@ function App() {
                     <input
                       value={name}
                       onChange={(event) => setName(event.target.value)}
-                      onKeyDown={(event) => event.key === 'Enter' && startCompetitor()}
+                      onKeyDown={(event) => event.key === 'Enter' && addCompetitor()}
                       placeholder="Enter competitor name"
                       autoComplete="off"
                     />
                   </label>
-                  <button className="button primary" onClick={startCompetitor} disabled={!name.trim()}>
-                    Start run <span>→</span>
+                  <button className="button primary" onClick={addCompetitor} disabled={!name.trim()}>
+                    Add competitor <span>→</span>
                   </button>
                 </div>
               </div>
-            ) : (
+            ) : pending ? (
+              <div className="ready-card">
+                <div className="ready-copy">
+                  <span className="field-label">At the start line · {pending.group}</span>
+                  <h2>{pending.name}</h2>
+                  <p>Timer starts only when you press Start.</p>
+                </div>
+                <div className="ready-obstacle">
+                  <span>First obstacle</span>
+                  <strong>{pending.obstacles?.[0] ?? groupObstacles[pending.group]?.[0] ?? OBSTACLES[0]}</strong>
+                </div>
+                <div className="ready-actions">
+                  <button className="button back" onClick={removePendingCompetitor}>Go back</button>
+                  <button className="button primary" onClick={startPendingCompetitor}>Start <span>→</span></button>
+                </div>
+              </div>
+            ) : active ? (
               <div className="live-card">
                 <div className="live-meta">
                   <div>
@@ -605,7 +664,7 @@ function App() {
                   </div>
                 </div>
               </div>
-            )}
+            ) : null}
 
             <div className="course-key">
               <span>Course map</span>
@@ -639,12 +698,14 @@ function App() {
                           <span>
                             {competitor.status === 'finished'
                               ? 'Course complete'
+                              : competitor.status === 'ready'
+                                ? 'Waiting to start'
                               : `${courseForCompetitor(competitor)[competitor.currentObstacle]} · ${competitor.status === 'fallen' ? 'Fell' : 'In progress'}`}
                           </span>
                         </div>
                         <div className="result-progress">
-                          <span>{competitor.status === 'finished' ? 'Buzzer' : `Obstacle ${competitor.currentObstacle + 1}`}</span>
-                          <strong>{formatTime(competitor.resultTime)}</strong>
+                          <span>{competitor.status === 'finished' ? 'Buzzer' : competitor.status === 'ready' ? 'Start line' : `Obstacle ${competitor.currentObstacle + 1}`}</span>
+                          <strong>{competitor.status === 'ready' ? '—' : formatTime(competitor.resultTime)}</strong>
                         </div>
                         {viewSessionId === 'current' && (
                           <button className="icon-button" onClick={() => deleteCompetitor(competitor.id)} aria-label={`Delete ${competitor.name}`}>
