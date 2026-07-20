@@ -119,7 +119,16 @@ input::placeholder { color: #929baa; }
 .sample-list strong { color: var(--ink); font: 650 13px var(--utility); }
 .no-data { color: #9ba4b1; padding: 8px 22px 22px; font-size: 12px; }
 
-.bottom-nav { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); z-index: 30; display: grid; grid-template-columns: repeat(3, 1fr); width: min(420px, calc(100vw - 28px)); padding: 7px; border: 1px solid rgba(255,255,255,.12); border-radius: 17px; background: rgba(15, 28, 48, .95); backdrop-filter: blur(15px); box-shadow: 0 18px 45px rgba(11, 22, 40, .28); }
+.obstacle-settings { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+.obstacle-settings label { display: grid; grid-template-columns: 54px 1fr; align-items: center; gap: 15px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: white; }
+.obstacle-settings label > span { color: #b3bac5; font: 700 24px var(--utility); text-align: center; }
+.obstacle-settings label > div { padding-left: 15px; border-left: 1px solid var(--line); }
+.obstacle-settings small { display: block; margin-bottom: 6px; color: var(--blue); font: 700 9px var(--utility); letter-spacing: 1px; text-transform: uppercase; }
+.obstacle-settings input { height: 45px; }
+.restore-button { margin-top: 16px; border: 1px solid var(--line); border-radius: 10px; background: white; color: var(--muted); padding: 11px 15px; font: 650 12px var(--body); cursor: pointer; }
+.restore-button:hover { border-color: var(--blue); color: var(--blue); }
+
+.bottom-nav { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); z-index: 30; display: grid; grid-template-columns: repeat(4, 1fr); width: min(520px, calc(100vw - 28px)); padding: 7px; border: 1px solid rgba(255,255,255,.12); border-radius: 17px; background: rgba(15, 28, 48, .95); backdrop-filter: blur(15px); box-shadow: 0 18px 45px rgba(11, 22, 40, .28); }
 .bottom-nav button { min-height: 55px; border: 0; border-radius: 11px; background: transparent; color: #8c9aae; display: flex; align-items: center; justify-content: center; gap: 8px; font: 650 12px var(--body); cursor: pointer; }
 .bottom-nav button.active { background: white; color: var(--blue); box-shadow: 0 3px 10px rgba(0,0,0,.22); }
 
@@ -168,6 +177,9 @@ input::placeholder { color: #929baa; }
   .result-name strong { font-size: 18px; }
   .stats-grid { grid-template-columns: 1fr; }
   .stats-section { margin-top: 42px; }
+  .obstacle-settings { grid-template-columns: 1fr; }
+  .obstacle-settings label { grid-template-columns: 42px 1fr; padding: 11px; }
+  .obstacle-settings label > span { font-size: 19px; }
   .stat-values { padding-inline: 17px; }
   .stat-card-trigger { padding-inline: 17px; }
   .stat-values strong { font-size: 14px; }

@@ -13,7 +13,7 @@ const OBSTACLES = [
 ] as const
 
 type Status = 'obstacle' | 'rest' | 'fallen' | 'finished'
-type Tab = 'track' | 'results' | 'stats'
+type Tab = 'track' | 'results' | 'stats' | 'settings'
 
 type Attempt = {
   obstacle: number
@@ -43,12 +43,14 @@ type ArchivedSession = {
   id: string
   startedAt: number
   endedAt: number
+  obstacles: string[]
   groups: string[]
   competitors: Competitor[]
 }
 
 type StoredData = {
   sessionStartedAt: number
+  obstacles: string[]
   groups: string[]
   competitors: Competitor[]
   history: ArchivedSession[]
@@ -62,20 +64,28 @@ const LEGACY_STORAGE_KEY = 'ninja-tracker-competition-v1'
 const loadData = (): StoredData => {
   try {
     const saved = localStorage.getItem(STORAGE_KEY)
-    if (saved) return JSON.parse(saved)
+    if (saved) {
+      const data = JSON.parse(saved) as StoredData
+      return {
+        ...data,
+        obstacles: data.obstacles ?? [...OBSTACLES],
+        history: data.history.map((session) => ({ ...session, obstacles: session.obstacles ?? [...OBSTACLES] })),
+      }
+    }
     const legacy: Competitor[] = JSON.parse(localStorage.getItem(LEGACY_STORAGE_KEY) ?? '[]')
     return {
       sessionStartedAt: Date.now(),
+      obstacles: [...OBSTACLES],
       groups: ['General'],
       competitors: legacy.map((competitor) => ({ ...competitor, group: competitor.group ?? 'General' })),
       history: [],
     }
   } catch {
-    return { sessionStartedAt: Date.now(), groups: ['General'], competitors: [], history: [] }
+    return { sessionStartedAt: Date.now(), obstacles: [...OBSTACLES], groups: ['General'], competitors: [], history: [] }
   }
 }
 
-const Icon = ({ name }: { name: 'timer' | 'podium' | 'chart' | 'plus' | 'trash' | 'chevron' }) => {
+const Icon = ({ name }: { name: 'timer' | 'podium' | 'chart' | 'plus' | 'trash' | 'chevron' | 'settings' }) => {
   const paths = {
     timer: <><circle cx="12" cy="13" r="8" /><path d="M12 9v4l2.5 1.5M9 2h6M12 2v3" /></>,
     podium: <><path d="M3 20v-6h5v6M8 20V9h8v11M16 20v-8h5v8M10.5 5.5 12 4l1.5 1.5" /></>,
@@ -83,6 +93,7 @@ const Icon = ({ name }: { name: 'timer' | 'podium' | 'chart' | 'plus' | 'trash' 
     plus: <path d="M12 5v14M5 12h14" />,
     trash: <><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13" /></>,
     chevron: <path d="m8 10 4 4 4-4" />,
+    settings: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21h-4v-.08A1.7 1.7 0 0 0 8.97 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15 1.7 1.7 0 0 0 3.08 14H3v-4h.08A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.88L4.2 7.06l2.83-2.83.06.06A1.7 1.7 0 0 0 8.97 4.6 1.7 1.7 0 0 0 10 3.08V3h4v.08A1.7 1.7 0 0 0 15.03 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9 1.7 1.7 0 0 0 20.92 10H21v4h-.08A1.7 1.7 0 0 0 19.4 15Z" /></>,
   }
   return <svg className="icon" viewBox="0 0 24 24" aria-hidden="true">{paths[name]}</svg>
 }
@@ -157,6 +168,7 @@ function App() {
   const [group, setGroup] = useState(initialData.groups[0] ?? 'General')
   const [newGroup, setNewGroup] = useState('')
   const [addingGroup, setAddingGroup] = useState(false)
+  const [obstacles, setObstacles] = useState<string[]>(initialData.obstacles)
   const [groups, setGroups] = useState(initialData.groups)
   const [sessionStartedAt, setSessionStartedAt] = useState(initialData.sessionStartedAt)
   const [history, setHistory] = useState<ArchivedSession[]>(initialData.history)
@@ -166,8 +178,8 @@ function App() {
   const [competitors, setCompetitors] = useState<Competitor[]>(initialData.competitors)
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ sessionStartedAt, groups, competitors, history }))
-  }, [sessionStartedAt, groups, competitors, history])
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ sessionStartedAt, obstacles, groups, competitors, history }))
+  }, [sessionStartedAt, obstacles, groups, competitors, history])
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 50)
@@ -176,9 +188,10 @@ function App() {
 
   const active = competitors.find((competitor) => competitor.status === 'obstacle' || competitor.status === 'rest')
   const viewedSession = viewSessionId === 'current'
-    ? { id: 'current', startedAt: sessionStartedAt, groups, competitors }
-    : history.find((session) => session.id === viewSessionId) ?? { id: 'current', startedAt: sessionStartedAt, groups, competitors }
+    ? { id: 'current', startedAt: sessionStartedAt, obstacles, groups, competitors }
+    : history.find((session) => session.id === viewSessionId) ?? { id: 'current', startedAt: sessionStartedAt, obstacles, groups, competitors }
   const viewedCompetitors = viewedSession.competitors
+  const viewedObstacles = viewedSession.obstacles
   const viewedGroups = viewedSession.groups.filter((item) => viewedCompetitors.some((competitor) => competitor.group === item))
   const statsCompetitors = statsGroup === 'all'
     ? viewedCompetitors
@@ -224,7 +237,7 @@ function App() {
       const attempts = competitor.attempts.map((attempt, index) =>
         index === competitor.attempts.length - 1 ? { ...attempt, endedAt, outcome: 'done' as const } : attempt
       )
-      if (competitor.currentObstacle === OBSTACLES.length - 1) {
+      if (competitor.currentObstacle === obstacles.length - 1) {
         return { ...competitor, attempts, status: 'finished' }
       }
       return {
@@ -297,6 +310,7 @@ function App() {
       id: crypto.randomUUID(),
       startedAt: sessionStartedAt,
       endedAt,
+      obstacles: [...obstacles],
       groups,
       competitors,
     }, ...current])
@@ -367,12 +381,6 @@ function App() {
       <main>
         {tab === 'track' && (
           <section className={`page track-page ${active ? 'run-active' : ''}`}>
-            <div className="page-heading">
-              <span className="eyebrow">Competition control</span>
-              <h1>Track the run.<br /><em>Beat the clock.</em></h1>
-              <p>Eight obstacles. One buzzer. Every hundredth counts.</p>
-            </div>
-
             {!active ? (
               <div className="new-run-card">
                 <div className="number-stamp">01</div>
@@ -433,11 +441,11 @@ function App() {
                 </div>
 
                 <div className="course-rail" aria-label={`Obstacle ${active.currentObstacle + 1} of 8`}>
-                  {OBSTACLES.map((obstacle, index) => {
+                  {obstacles.map((obstacle, index) => {
                     const complete = index < active.currentObstacle || active.status === 'finished'
                     const current = index === active.currentObstacle
                     return (
-                      <div className={`rail-stop ${complete ? 'complete' : ''} ${current ? 'current' : ''}`} key={obstacle}>
+                      <div className={`rail-stop ${complete ? 'complete' : ''} ${current ? 'current' : ''}`} key={index}>
                         <div className="rail-dot">{complete ? '✓' : index + 1}</div>
                         <span>{obstacle}</span>
                       </div>
@@ -448,7 +456,7 @@ function App() {
                 <div className={`action-panel ${active.status}`}>
                   <div>
                     <span className="phase-label">{active.status === 'rest' ? `Rest ${active.currentObstacle + 1}` : `Obstacle ${active.currentObstacle + 1} of 8`}</span>
-                    <h3>{active.status === 'rest' ? 'Recovery time' : OBSTACLES[active.currentObstacle]}</h3>
+                    <h3>{active.status === 'rest' ? 'Recovery time' : obstacles[active.currentObstacle]}</h3>
                   </div>
                   <div className="phase-clock">
                     {formatTime(now - (
@@ -507,7 +515,7 @@ function App() {
                           <span>
                             {competitor.status === 'finished'
                               ? 'Course complete'
-                              : `${OBSTACLES[competitor.currentObstacle]} · ${competitor.status === 'fallen' ? 'Fell' : 'In progress'}`}
+                              : `${viewedObstacles[competitor.currentObstacle]} · ${competitor.status === 'fallen' ? 'Fell' : 'In progress'}`}
                           </span>
                         </div>
                         <div className="result-progress">
@@ -549,8 +557,8 @@ function App() {
             <div className="stats-section">
               <div className="section-title"><span>01</span><div><h2>Obstacle time</h2><p>Time spent on each obstacle, including falls</p></div></div>
               <div className="stats-grid">
-                {OBSTACLES.map((obstacle, index) => (
-                  <StatCard key={obstacle} title={obstacle} label={`Obstacle ${index + 1}`} samples={obstacleSamples(index)} />
+                {viewedObstacles.map((obstacle, index) => (
+                  <StatCard key={index} title={obstacle} label={`Obstacle ${index + 1}`} samples={obstacleSamples(index)} />
                 ))}
               </div>
             </div>
@@ -558,8 +566,8 @@ function App() {
             <div className="stats-section">
               <div className="section-title"><span>02</span><div><h2>Rest time</h2><p>Recovery time between obstacles</p></div></div>
               <div className="stats-grid">
-                {OBSTACLES.slice(0, -1).map((_, index) => (
-                  <StatCard key={index} title={`After ${OBSTACLES[index]}`} label={`Rest ${index + 1}`} samples={restSamples(index)} />
+                {viewedObstacles.slice(0, -1).map((_, index) => (
+                  <StatCard key={index} title={`After ${viewedObstacles[index]}`} label={`Rest ${index + 1}`} samples={restSamples(index)} />
                 ))}
               </div>
             </div>
@@ -567,11 +575,45 @@ function App() {
             <div className="stats-section">
               <div className="section-title"><span>03</span><div><h2>Arrival time</h2><p>Elapsed time from the start to each obstacle</p></div></div>
               <div className="stats-grid">
-                {OBSTACLES.map((obstacle, index) => (
-                  <StatCard key={obstacle} title={obstacle} label={`Start obstacle ${index + 1}`} samples={arrivalSamples(index)} />
+                {viewedObstacles.map((obstacle, index) => (
+                  <StatCard key={index} title={obstacle} label={`Start obstacle ${index + 1}`} samples={arrivalSamples(index)} />
                 ))}
               </div>
             </div>
+          </section>
+        )}
+
+        {tab === 'settings' && (
+          <section className="page settings-page">
+            <div className="page-heading compact">
+              <span className="eyebrow">Course setup</span>
+              <h1>Name the obstacles.</h1>
+              <p>Changes apply to the current session. Archived sessions keep their original course names.</p>
+            </div>
+            <div className="obstacle-settings">
+              {obstacles.map((obstacle, index) => (
+                <label key={index}>
+                  <span>{String(index + 1).padStart(2, '0')}</span>
+                  <div>
+                    <small>Obstacle {index + 1}</small>
+                    <input
+                      value={obstacle}
+                      onChange={(event) => setObstacles((current) =>
+                        current.map((item, itemIndex) => itemIndex === index ? event.target.value : item)
+                      )}
+                      onBlur={() => {
+                        if (!obstacle.trim()) {
+                          setObstacles((current) => current.map((item, itemIndex) =>
+                            itemIndex === index ? OBSTACLES[index] : item
+                          ))
+                        }
+                      }}
+                    />
+                  </div>
+                </label>
+              ))}
+            </div>
+            <button className="restore-button" onClick={() => setObstacles([...OBSTACLES])}>Restore default names</button>
           </section>
         )}
       </main>
@@ -585,6 +627,9 @@ function App() {
         </button>
         <button className={tab === 'stats' ? 'active' : ''} onClick={() => setTab('stats')}>
           <Icon name="chart" /><span>Statistics</span>
+        </button>
+        <button className={tab === 'settings' ? 'active' : ''} onClick={() => { setViewSessionId('current'); setTab('settings') }}>
+          <Icon name="settings" /><span>Settings</span>
         </button>
       </nav>
     </div>
