@@ -230,6 +230,7 @@ function App() {
   const [history, setHistory] = useState<ArchivedSession[]>(initialData.history)
   const [viewSessionId, setViewSessionId] = useState('current')
   const [statsGroup, setStatsGroup] = useState('all')
+  const [expandedCompetitorId, setExpandedCompetitorId] = useState<string | null>(null)
   const [now, setNow] = useState(Date.now())
   const [competitors, setCompetitors] = useState<Competitor[]>(initialData.competitors)
 
@@ -505,6 +506,38 @@ function App() {
     })
   )
   const settingsObstacles = groupObstacles[settingsGroup] ?? groupObstacles.General ?? [...OBSTACLES]
+  const competitorBreakdown = (competitor: Competitor) => {
+    const course = courseForCompetitor(competitor)
+    return competitor.attempts.flatMap((attempt, index) => {
+      const isLiveAttempt = viewSessionId === 'current'
+        && competitor.id === active?.id
+        && competitor.status === 'obstacle'
+        && index === competitor.attempts.length - 1
+      const obstacleEnd = attempt.endedAt ?? (isLiveAttempt ? now : undefined)
+      const rest = competitor.rests.find((item) => item.afterObstacle === attempt.obstacle)
+      const isLiveRest = viewSessionId === 'current'
+        && competitor.id === active?.id
+        && competitor.status === 'rest'
+        && rest === competitor.rests[competitor.rests.length - 1]
+      const restEnd = rest?.endedAt ?? (isLiveRest ? now : undefined)
+      return [
+        {
+          key: `obstacle-${attempt.obstacle}`,
+          type: `Obstacle ${attempt.obstacle + 1}`,
+          name: course[attempt.obstacle] ?? `Obstacle ${attempt.obstacle + 1}`,
+          duration: obstacleEnd ? obstacleEnd - attempt.startedAt : null,
+          outcome: attempt.outcome,
+        },
+        ...(rest ? [{
+          key: `rest-${rest.afterObstacle}`,
+          type: `Rest ${rest.afterObstacle + 1}`,
+          name: `After ${course[rest.afterObstacle] ?? `obstacle ${rest.afterObstacle + 1}`}`,
+          duration: restEnd ? restEnd - rest.startedAt : null,
+          outcome: undefined,
+        }] : []),
+      ]
+    })
+  }
 
   return (
     <div className="app-shell">
@@ -690,30 +723,83 @@ function App() {
                       <span>{groupName}</span>
                       <small>{groupRanked.length} competitor{groupRanked.length === 1 ? '' : 's'}</small>
                     </div>
-                    {groupRanked.map((competitor, index) => (
-                      <article className={`result-row rank-${index + 1}`} key={competitor.id}>
-                        <div className="rank">{String(index + 1).padStart(2, '0')}</div>
-                        <div className="result-name">
-                          <strong>{competitor.name}</strong>
-                          <span>
-                            {competitor.status === 'finished'
-                              ? 'Course complete'
-                              : competitor.status === 'ready'
-                                ? 'Waiting to start'
-                              : `${courseForCompetitor(competitor)[competitor.currentObstacle]} · ${competitor.status === 'fallen' ? 'Fell' : 'In progress'}`}
-                          </span>
-                        </div>
-                        <div className="result-progress">
-                          <span>{competitor.status === 'finished' ? 'Buzzer' : competitor.status === 'ready' ? 'Start line' : `Obstacle ${competitor.currentObstacle + 1}`}</span>
-                          <strong>{competitor.status === 'ready' ? '—' : formatTime(competitor.resultTime)}</strong>
-                        </div>
-                        {viewSessionId === 'current' && (
-                          <button className="icon-button" onClick={() => deleteCompetitor(competitor.id)} aria-label={`Delete ${competitor.name}`}>
-                            <Icon name="trash" />
-                          </button>
-                        )}
-                      </article>
-                    ))}
+                    {groupRanked.map((competitor, index) => {
+                      const expanded = expandedCompetitorId === competitor.id
+                      const breakdown = competitorBreakdown(competitor)
+                      return (
+                        <article className={`result-entry ${expanded ? 'expanded' : ''}`} key={competitor.id}>
+                          <div
+                            className={`result-row rank-${index + 1}`}
+                            role="button"
+                            tabIndex={0}
+                            aria-expanded={expanded}
+                            onClick={() => setExpandedCompetitorId(expanded ? null : competitor.id)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault()
+                                setExpandedCompetitorId(expanded ? null : competitor.id)
+                              }
+                            }}
+                          >
+                            <div className="rank">{String(index + 1).padStart(2, '0')}</div>
+                            <div className="result-name">
+                              <strong>{competitor.name}</strong>
+                              <span>
+                                {competitor.status === 'finished'
+                                  ? 'Course complete'
+                                  : competitor.status === 'ready'
+                                    ? 'Waiting to start'
+                                  : `${courseForCompetitor(competitor)[competitor.currentObstacle]} · ${competitor.status === 'fallen' ? 'Fell' : 'In progress'}`}
+                              </span>
+                            </div>
+                            <div className="result-progress">
+                              <span>{competitor.status === 'finished' ? 'Buzzer' : competitor.status === 'ready' ? 'Start line' : `Obstacle ${competitor.currentObstacle + 1}`}</span>
+                              <strong>{competitor.status === 'ready' ? '—' : formatTime(competitor.resultTime)}</strong>
+                            </div>
+                            <div className="result-controls">
+                              <span className="expand-icon" aria-hidden="true"><Icon name="chevron" /></span>
+                              {viewSessionId === 'current' && (
+                                <button
+                                  className="icon-button"
+                                  onClick={(event) => {
+                                    event.stopPropagation()
+                                    deleteCompetitor(competitor.id)
+                                  }}
+                                  aria-label={`Delete ${competitor.name}`}
+                                >
+                                  <Icon name="trash" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                          {expanded && (
+                            <div className="result-breakdown">
+                              <div className="breakdown-heading">
+                                <span>Run breakdown</span>
+                                <small>{breakdown.length} recorded split{breakdown.length === 1 ? '' : 's'}</small>
+                              </div>
+                              {breakdown.length ? (
+                                <div className="breakdown-list">
+                                  {breakdown.map((split) => (
+                                    <div className="breakdown-row" key={split.key}>
+                                      <span className={`split-marker ${split.type.startsWith('Rest') ? 'rest' : ''}`} />
+                                      <div>
+                                        <small>{split.type}</small>
+                                        <strong>{split.name}</strong>
+                                      </div>
+                                      {split.outcome === 'fall' && <span className="fall-badge">Fall</span>}
+                                      <time>{split.duration === null ? 'Incomplete' : formatTime(split.duration)}</time>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <p className="breakdown-empty">This competitor has not started yet.</p>
+                              )}
+                            </div>
+                          )}
+                        </article>
+                      )
+                    })}
                   </section>
                 )
               }) : (
